@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+esempio script.py
+
+# Credenziali e segreti locali
+.env
+client_secret.json
+token.json
+
+# Log
+automation.log
+
+# Sistemi/IDE
+.vscode/
+.DS_Store
+
+Agent24event.code-workspace
+
+documenti/
+
+GitHub comandi ALL.txt
