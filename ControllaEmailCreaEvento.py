@@ -3,8 +3,11 @@ import json
 import base64
 import subprocess
 import logging
+import time
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple, List
+import shutil
 
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
@@ -27,6 +30,21 @@ SCOPES = [
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Rome")
+try:
+    MAX_UNREAD_TO_PROCESS = int(os.getenv("MAX_UNREAD_TO_PROCESS", "10"))
+except Exception:
+    MAX_UNREAD_TO_PROCESS = 10
+try:
+    PER_EMAIL_SLEEP_SECS = float(os.getenv("PER_EMAIL_SLEEP_SECS", "0"))
+except Exception:
+    PER_EMAIL_SLEEP_SECS = 0.0
+
+
+class RateLimitExceeded(Exception):
+    """Eccezione quando la chiamata a Gemini è rate-limited (HTTP 429)."""
+    def __init__(self, message: str, retry_after_seconds: Optional[int] = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 def setup_logging() -> None:
@@ -119,6 +137,33 @@ def setup_credentials_from_ci_env() -> bool:
     return wrote_any
 
 
+def _validate_token_file(required_scopes: List[str]) -> Optional[str]:
+    """Controlla che token.json contenga un refresh_token e gli scope richiesti.
+    Restituisce None se tutto ok, altrimenti una stringa con l'errore riscontrato."""
+    try:
+        base_dir = os.path.dirname(__file__)
+        token_path = os.path.join(base_dir, "token.json")
+        if not os.path.exists(token_path):
+            return "token.json non presente"
+        with open(token_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not data.get("refresh_token"):
+            return "manca refresh_token nel token"
+        scopes_field = data.get("scopes")
+        if not scopes_field:
+            return "manca il campo scopes nel token"
+        if isinstance(scopes_field, str):
+            scopes = set(s.strip() for s in scopes_field.split() if s.strip())
+        else:
+            scopes = set(scopes_field)
+        missing = [s for s in required_scopes if s not in scopes]
+        if missing:
+            return f"scopes mancanti: {', '.join(missing)}"
+        return None
+    except Exception as e:
+        return f"errore leggendo token.json: {e}"
+
+
 def get_credentials() -> Credentials:
     token_path = os.path.join(os.path.dirname(__file__), "token.json")
     client_secret_path = os.path.join(os.path.dirname(__file__), "client_secret.json")
@@ -131,7 +176,11 @@ def get_credentials() -> Credentials:
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             logging.info("Token scaduto: eseguo refresh…")
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                # Lascia che il chiamante gestisca un errore specifico
+                raise
         else:
             # Se in CI non possiamo aprire browser: richiedi TOKEN_JSON valido
             running_in_ci = bool(os.environ.get("GITHUB_ACTIONS") or os.environ.get("CI"))
@@ -159,17 +208,30 @@ def build_services(creds: Credentials):
     return gmail, calendar
 
 
-def list_unread_messages(gmail) -> List[Dict]:
+def list_unread_messages(gmail, limit: Optional[int] = None) -> List[Dict]:
+    """Restituisce fino a 'limit' messaggi non letti (i più recenti disponibili).
+    Nota: l'API Gmail tipicamente restituisce i messaggi in ordine dal più recente,
+    ma non è formalmente garantito. Usiamo maxResults limitato per ridurre chiamate.
+    """
     messages: List[Dict] = []
     page_token: Optional[str] = None
+    page_size = 50
+    if limit is not None:
+        page_size = max(1, min(50, limit))
     while True:
         resp = (
             gmail.users()
             .messages()
-            .list(userId="me", q="is:unread", pageToken=page_token, maxResults=50)
+            .list(userId="me", q="is:unread", pageToken=page_token, maxResults=page_size)
             .execute()
         )
-        messages.extend(resp.get("messages", []))
+        batch = resp.get("messages", [])
+        if not batch:
+            break
+        messages.extend(batch)
+        if limit is not None and len(messages) >= limit:
+            messages = messages[:limit]
+            break
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
@@ -242,16 +304,36 @@ def call_gemini_cli(prompt: str, model: str = MODEL) -> Dict:
         raise RuntimeError("GEMINI_API_KEY non impostata (manca .env o variabile d'ambiente)")
 
     env = os.environ.copy()
+    # Individua path eseguibile CLI
+    cli_path = env.get("GEMINI_CLI_PATH")
+    if cli_path and not os.path.exists(cli_path):
+        logging.warning("GEMINI_CLI_PATH specificato ma non trovato: %s", cli_path)
+        cli_path = None
+    if not cli_path:
+        found = shutil.which("gemini")
+        if found:
+            cli_path = found
+    if cli_path:
+        logging.info("Gemini CLI individuata: %s", cli_path)
+    else:
+        logging.warning("CLI 'gemini' non trovata nel PATH e GEMINI_CLI_PATH non impostato.")
+
+    exe = cli_path or "gemini"
+    # Varianti supportate da diverse versioni della CLI:
+    # - Alcune versioni non hanno il sottocomando 'prompt' né l'opzione '--json'.
+    # - Usiamo -p per modalità non-interattiva o stdin come fallback.
     candidates = [
-        ["gemini", "prompt", "-m", model, "--json", prompt],
-        ["gemini", "-m", model, "-p", prompt, "--json"],
-        ["gemini", "-m", model, "--json"],  # con stdin
-        ["gemini", prompt],
+        {"args": [exe, "-m", model, "-p", prompt], "stdin": False},
+        {"args": [exe, "-p", prompt], "stdin": False},
+        {"args": [exe, "-m", model], "stdin": True},
+        {"args": [exe], "stdin": True},
     ]
 
-    for cmd in candidates:
+    for item in candidates:
+        cmd = item["args"]
+        use_stdin = item["stdin"]
         try:
-            if cmd == candidates[2]:  # stdin
+            if use_stdin:
                 res = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env)
             else:
                 res = subprocess.run(cmd, capture_output=True, text=True, env=env)
@@ -269,11 +351,16 @@ def call_gemini_cli(prompt: str, model: str = MODEL) -> Dict:
                 return data
         except FileNotFoundError:
             logging.warning("CLI 'gemini' non trovata: provo fallback SDK google-generativeai…")
-            data = call_gemini_sdk(prompt, model)
-            if data is not None:
-                return data
+            try:
+                data = call_gemini_sdk(prompt, model)
+                if data is not None:
+                    return data
+            except RateLimitExceeded:
+                # Propaga al chiamante così può interrompere il batch
+                raise
+            # Se arrivo qui, fallback non ha prodotto dati
             raise FileNotFoundError(
-                "Comando 'gemini' non trovato e fallback SDK non disponibile. Installa la CLI o la libreria google-generativeai."
+                "Comando 'gemini' non trovato e fallback SDK non disponibile o senza dati utili."
             )
         except Exception as e:
             logging.warning("Errore chiamando gemini cli con %s: %s", cmd, e)
@@ -302,7 +389,19 @@ def call_gemini_sdk(prompt: str, model: str = MODEL) -> Optional[Dict]:
         data = _try_parse_json(text)
         return data
     except Exception as e:
-        logging.warning("Errore nel fallback SDK: %s", e)
+        msg = str(e)
+        # Riconosciamo rate limiting (429) e stimiamo retry
+        if "429" in msg or "quota" in msg.lower() or "rate" in msg.lower():
+            retry = None
+            m = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)\s*\}", msg)
+            if m:
+                try:
+                    retry = int(m.group(1))
+                except Exception:
+                    retry = None
+            logging.warning("Errore nel fallback SDK (quota/429): %s", msg)
+            raise RateLimitExceeded("Quota Gemini esaurita o rate limit raggiunto", retry_after_seconds=retry)
+        logging.warning("Errore nel fallback SDK: %s", msg)
         return None
 
 
@@ -481,16 +580,34 @@ def main() -> None:
         logging.error("Variabile GEMINI_API_KEY mancante. Inserirla in .env o nell'ambiente.")
         return
 
+    # In CI, verifica preliminare del token e degli scope per messaggi più chiari
+    if os.environ.get("GITHUB_ACTIONS") or os.environ.get("CI"):
+        token_issue = _validate_token_file(SCOPES)
+        if token_issue:
+            logging.error(
+                "Token OAuth non valido per l'esecuzione in CI: %s. "
+                "Rigenera il TOKEN_JSON con gli scope richiesti: %s",
+                token_issue,
+                ", ".join(SCOPES),
+            )
+            return
+
     try:
         creds = get_credentials()
     except Exception as e:
-        logging.exception("Errore durante autenticazione Google: %s", e)
+        logging.exception(
+            "Errore durante autenticazione Google: %s. "
+            "Se l'errore è invalid_scope, rigenera il TOKEN_JSON assicurandoti che includa gli scope: %s",
+            e,
+            ", ".join(SCOPES),
+        )
         return
 
     gmail, calendar = build_services(creds)
 
     try:
-        messages = list_unread_messages(gmail)
+        logging.info("Limiterò l'elaborazione a massimo %d email non lette (configurabile con MAX_UNREAD_TO_PROCESS)", MAX_UNREAD_TO_PROCESS)
+        messages = list_unread_messages(gmail, limit=MAX_UNREAD_TO_PROCESS)
     except Exception as e:
         logging.exception("Errore leggendo le email: %s", e)
         return
@@ -499,13 +616,24 @@ def main() -> None:
         logging.info("Nessuna email non letta: nulla da fare.")
         return
 
-    logging.info("%d email non lette da elaborare…", len(messages))
+    logging.info("%d email non lette da elaborare (cap impostato a %d)", len(messages), MAX_UNREAD_TO_PROCESS)
     for m in messages:
         msg_id = m.get("id")
         if not msg_id:
             continue
         try:
             process_email(gmail, calendar, msg_id)
+            if PER_EMAIL_SLEEP_SECS > 0:
+                time.sleep(PER_EMAIL_SLEEP_SECS)
+        except RateLimitExceeded as e:
+            if e.retry_after_seconds:
+                logging.error(
+                    "Quota Gemini esaurita (429). Suggerito retry dopo %s secondi. Interrompo il batch.",
+                    e.retry_after_seconds,
+                )
+            else:
+                logging.error("Quota Gemini esaurita (429). Interrompo il batch.")
+            break
         except Exception as e:
             logging.exception("Errore elaborando email %s: %s", msg_id, e)
             # Non marcata come letta in caso di errore
