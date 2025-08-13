@@ -1,0 +1,77 @@
+name: Run Email->Calendar Agent
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7,13,19 * * *'  # 3 volte al giorno UTC (adatta ai tuoi orari locali)
+
+concurrency:
+  group: calendar-agent-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: Europe/Rome
+      TIMEZONE: Europe/Rome
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
+
+      - name: Install Gemini CLI
+        run: |
+          curl -fsSL https://dl.google.com/gemini/install.sh | bash
+          echo "$HOME/.gemini/bin" >> $GITHUB_PATH
+
+      - name: Verify Gemini CLI
+        run: |
+          gemini --version || (echo 'Gemini CLI mancante' && exit 1)
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r "requirements.txt"
+
+      - name: Run agent
+        working-directory: ${{ github.workspace }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLIENT_SECRET_JSON: ${{ secrets.CLIENT_SECRET_JSON }}
+          TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
+        run: |
+          # Jitter di 5 secondi per ridurre collisioni con altri job pianificati
+          sleep 5
+          python "ControllaEmailCreaEvento.py"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "# Riepilogo Agent Gmail -> Calendar";
+            echo "- Branch: $GITHUB_REF";
+            echo "- Commit: $GITHUB_SHA";
+            echo "- Esecuzione: $(date -u) (UTC)";
+            echo "- Runner: $RUNNER_OS";
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Raccogli artefatti (log)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-${{ github.run_id }}
+          path: |
+            automation.log
+          if-no-files-found: ignore
+          retention-days: 10
