@@ -10,6 +10,7 @@ Requisiti:
 - Il file `token.json` sarà creato al primo avvio dopo l'autorizzazione.
 - Variabile d'ambiente `GEMINI_API_KEY` già presente (non forniamo `.env`).
 - CLI di Gemini installata e disponibile nel PATH (comando `gemini`).
+	- Nota: in CI l'installazione della CLI è "best-effort"; se non disponibile, lo script usa il fallback SDK `google-generativeai` automaticamente.
 
 Installazione dipendenze (Windows PowerShell) senza venv:
 ```powershell
@@ -35,9 +36,11 @@ Log: `automation.log` nella stessa cartella.
 ## Esecuzione in GitHub Actions (CI)
 
 Questo repo include un workflow: `.github/workflows/run-agent.yml` che:
-- Installa la Gemini CLI sul runner,
+- Esegue un precheck dei Secrets e cache di pip,
+- Tenta l'installazione della Gemini CLI (best-effort) e imposta il PATH,
 - Installa le dipendenze Python,
-- Esegue lo script.
+- Esegue lo script (con jitter di 5s),
+- Carica l'artefatto `automation.log` e scrive un Job Summary.
 
 Configura i Secrets nel repository:
 - `GEMINI_API_KEY`: chiave API di Gemini.
@@ -45,3 +48,5 @@ Configura i Secrets nel repository:
 - `TOKEN_JSON`: contenuto del token.json con refresh_token valido (raw JSON o base64).
 
 Lo script, in CI, scrive `client_secret.json` e `token.json` dai Secrets. In ambiente CI, non viene avviato il browser per OAuth: serve un `TOKEN_JSON` già valido.
+
+Se la CLI Gemini non è presente sul runner, lo script utilizza automaticamente il fallback SDK (`google-generativeai`) per generare la risposta JSON; la dipendenza è inclusa in `requirements.txt`.

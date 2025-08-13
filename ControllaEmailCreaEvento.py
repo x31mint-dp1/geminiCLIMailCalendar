@@ -268,13 +268,42 @@ def call_gemini_cli(prompt: str, model: str = MODEL) -> Dict:
             if data is not None:
                 return data
         except FileNotFoundError:
+            logging.warning("CLI 'gemini' non trovata: provo fallback SDK google-generativeai…")
+            data = call_gemini_sdk(prompt, model)
+            if data is not None:
+                return data
             raise FileNotFoundError(
-                "Comando 'gemini' non trovato. Assicurarsi che la CLI di Gemini sia installata e nel PATH."
+                "Comando 'gemini' non trovato e fallback SDK non disponibile. Installa la CLI o la libreria google-generativeai."
             )
         except Exception as e:
             logging.warning("Errore chiamando gemini cli con %s: %s", cmd, e)
 
     raise ValueError("Impossibile ottenere una risposta JSON valida dalla CLI di Gemini.")
+
+
+def call_gemini_sdk(prompt: str, model: str = MODEL) -> Optional[Dict]:
+    """Fallback: usa google-generativeai se la CLI non è disponibile."""
+    try:
+        import google.generativeai as genai
+    except Exception as e:
+        logging.warning("SDK Gemini non disponibile: %s", e)
+        return None
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        logging.warning("API key Gemini mancante per SDK.")
+        return None
+
+    try:
+        genai.configure(api_key=api_key)
+        mdl = genai.GenerativeModel(model)
+        resp = mdl.generate_content(prompt)
+        text = getattr(resp, "text", None) or ""
+        data = _try_parse_json(text)
+        return data
+    except Exception as e:
+        logging.warning("Errore nel fallback SDK: %s", e)
+        return None
 
 
 def parse_event_decision(data: Dict) -> Tuple[bool, str, Optional[str], Optional[str], str]:

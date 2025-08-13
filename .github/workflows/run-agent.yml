@@ -25,73 +25,102 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Precheck secrets (non bloccante)
+        id: precheck
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLIENT_SECRET_JSON: ${{ secrets.CLIENT_SECRET_JSON }}
+          TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
+        run: |
+          missing=0
+          [ -z "$GEMINI_API_KEY" ] && echo "::warning::Manca il secret GEMINI_API_KEY" && missing=1 || true
+          [ -z "$CLIENT_SECRET_JSON" ] && echo "::warning::Manca il secret CLIENT_SECRET_JSON" && missing=1 || true
+          [ -z "$TOKEN_JSON" ] && echo "::warning::Manca il secret TOKEN_JSON" && missing=1 || true
+          if [ "$missing" -eq 0 ]; then
+            echo "have_secrets=true" >> "$GITHUB_OUTPUT"
+            echo "Tutti i secrets presenti. Procedo con install e run."
+          else
+            echo "have_secrets=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Secrets mancanti: i passaggi di installazione ed esecuzione verranno saltati, ma il job rimarrà verde."
+          fi
+
       - name: Install system deps
+        if: ${{ steps.precheck.outputs.have_secrets == 'true' }}
         shell: bash
         run: |
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y curl unzip
 
-      - name: Install Gemini CLI
+      - name: Install Gemini CLI (best-effort)
+        if: ${{ steps.precheck.outputs.have_secrets == 'true' }}
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fsSL https://dl.google.com/gemini/install.sh | bash
-          # Aggiungi percorsi comuni al PATH per i passi successivi
+          (curl -fsSL https://dl.google.com/gemini/install.sh | bash) || echo "Installazione CLI non disponibile, proseguirò con il fallback SDK"
           if [ -d "$HOME/.gemini/bin" ]; then echo "$HOME/.gemini/bin" >> "$GITHUB_PATH"; fi
           if [ -d "$HOME/.local/bin" ]; then echo "$HOME/.local/bin" >> "$GITHUB_PATH"; fi
           if [ -d "$HOME/bin" ]; then echo "$HOME/bin" >> "$GITHUB_PATH"; fi
 
-      - name: Locate Gemini CLI (fallback PATH)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          if ! command -v gemini >/dev/null 2>&1; then
-            FOUND_DIR=""
-            for d in "$HOME/.gemini/bin" "$HOME/.local/bin" "$HOME/bin"; do
-              if [ -x "$d/gemini" ]; then FOUND_DIR="$d"; break; fi
-            done
-            if [ -n "$FOUND_DIR" ]; then
-              echo "$FOUND_DIR" >> "$GITHUB_PATH"
-            fi
-          fi
-
-      - name: Verify Gemini CLI
-        shell: bash
-        run: |
-          set -euxo pipefail
-          gemini --version || (echo 'Gemini CLI mancante' && exit 1)
-
       - name: Install Python dependencies
+        if: ${{ steps.precheck.outputs.have_secrets == 'true' }}
         shell: bash
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
           pip install -r "requirements.txt"
 
+      - name: Jitter (5 secondi)
+        if: ${{ steps.precheck.outputs.have_secrets == 'true' }}
+        shell: bash
+        run: |
+          sleep 5
+
       - name: Run agent
+        if: ${{ steps.precheck.outputs.have_secrets == 'true' }}
         working-directory: ${{ github.workspace }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CLIENT_SECRET_JSON: ${{ secrets.CLIENT_SECRET_JSON }}
           TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
+          GITHUB_ACTIONS: "true"
+          TZ: Europe/Rome
         shell: bash
         run: |
-          # Jitter di 5 secondi per ridurre collisioni con altri job pianificati
-          sleep 5
           python "ControllaEmailCreaEvento.py"
 
       - name: Job summary
         if: always()
         shell: bash
+        env:
+          HAVE_SECRETS: ${{ steps.precheck.outputs.have_secrets }}
         run: |
           {
             echo "# Riepilogo Agent Gmail -> Calendar";
+            echo;
+            echo "- Data/Ora: $(date '+%Y-%m-%d %H:%M:%S %Z')";
             echo "- Branch: $GITHUB_REF";
             echo "- Commit: $GITHUB_SHA";
-            echo "- Esecuzione: $(date -u) (UTC)";
             echo "- Runner: $RUNNER_OS";
-          } >> $GITHUB_STEP_SUMMARY
+            echo "- Secrets presenti: ${HAVE_SECRETS:-unknown}";
+            if [ -f automation.log ]; then
+              echo "- Log presente: si";
+              echo "- Dimensione log: $(wc -c < automation.log | tr -d ' ') bytes";
+            else
+              echo "- Log presente: no";
+            fi
+            echo;
+            echo "> Nota: se la CLI Gemini non è disponibile, lo script usa automaticamente il fallback SDK.";
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Raccogli artefatti (log)
         if: always()

@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 esempio script.py
+esempio funzionante.yml
 
 # Credenziali e segreti locali
 .env
