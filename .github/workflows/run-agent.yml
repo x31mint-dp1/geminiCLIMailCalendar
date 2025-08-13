@@ -26,21 +26,46 @@ jobs:
           python-version: '3.11'
 
       - name: Install system deps
+        shell: bash
         run: |
+          set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y curl
+          sudo apt-get install -y curl unzip
 
       - name: Install Gemini CLI
+        shell: bash
         run: |
+          set -euxo pipefail
           curl -fsSL https://dl.google.com/gemini/install.sh | bash
-          echo "$HOME/.gemini/bin" >> $GITHUB_PATH
+          # Aggiungi percorsi comuni al PATH per i passi successivi
+          if [ -d "$HOME/.gemini/bin" ]; then echo "$HOME/.gemini/bin" >> "$GITHUB_PATH"; fi
+          if [ -d "$HOME/.local/bin" ]; then echo "$HOME/.local/bin" >> "$GITHUB_PATH"; fi
+          if [ -d "$HOME/bin" ]; then echo "$HOME/bin" >> "$GITHUB_PATH"; fi
+
+      - name: Locate Gemini CLI (fallback PATH)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if ! command -v gemini >/dev/null 2>&1; then
+            FOUND_DIR=""
+            for d in "$HOME/.gemini/bin" "$HOME/.local/bin" "$HOME/bin"; do
+              if [ -x "$d/gemini" ]; then FOUND_DIR="$d"; break; fi
+            done
+            if [ -n "$FOUND_DIR" ]; then
+              echo "$FOUND_DIR" >> "$GITHUB_PATH"
+            fi
+          fi
 
       - name: Verify Gemini CLI
+        shell: bash
         run: |
+          set -euxo pipefail
           gemini --version || (echo 'Gemini CLI mancante' && exit 1)
 
       - name: Install Python dependencies
+        shell: bash
         run: |
+          set -euxo pipefail
           python -m pip install --upgrade pip
           pip install -r "requirements.txt"
 
@@ -50,6 +75,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CLIENT_SECRET_JSON: ${{ secrets.CLIENT_SECRET_JSON }}
           TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
+        shell: bash
         run: |
           # Jitter di 5 secondi per ridurre collisioni con altri job pianificati
           sleep 5
@@ -57,6 +83,7 @@ jobs:
 
       - name: Job summary
         if: always()
+        shell: bash
         run: |
           {
             echo "# Riepilogo Agent Gmail -> Calendar";
