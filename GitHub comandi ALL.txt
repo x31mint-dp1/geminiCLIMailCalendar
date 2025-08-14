@@ -35,6 +35,9 @@ Ora che tutto è configurato, il tuo lavoro quotidiano sarà molto più semplice
 Fai delle modifiche ai tuoi file (scrivi codice, correggi un bug, etc.).
 Prepara le modifiche per il commit:
 code
+git pull        (se hai committato dal telefono, fara' il merge dei commit pc telefono  :wq)
+
+code
 git add .
 
 Crea un commit per salvare le modifiche nella tua cronologia locale:

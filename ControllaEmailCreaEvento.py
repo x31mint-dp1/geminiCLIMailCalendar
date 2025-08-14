@@ -1,13 +1,11 @@
 import os
 import json
 import base64
-import subprocess
 import logging
 import time
 import re
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple, List
-import shutil
 
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
@@ -297,92 +295,20 @@ def _try_parse_json(text: str) -> Optional[Dict]:
     return None
 
 
-def call_gemini_cli(prompt: str, model: str = None) -> Dict:
+def call_gemini_api(prompt: str, model: str = None) -> Optional[Dict]:
+    """Usa google-generativeai SDK per analizzare il prompt."""
     if model is None:
-        model = MODEL or "gemini-1.5-pro"
-    
-    if not os.getenv("GEMINI_API_KEY"):
-        raise RuntimeError("GEMINI_API_KEY non impostata (manca .env o variabile d'ambiente)")
-
-    env = os.environ.copy()
-    # Individua path eseguibile CLI
-    cli_path = env.get("GEMINI_CLI_PATH")
-    if cli_path and not os.path.exists(cli_path):
-        logging.warning("GEMINI_CLI_PATH specificato ma non trovato: %s", cli_path)
-        cli_path = None
-    if not cli_path:
-        found = shutil.which("gemini")
-        if found:
-            cli_path = found
-    if cli_path:
-        logging.info("Gemini CLI individuata: %s", cli_path)
-    else:
-        logging.warning("CLI 'gemini' non trovata nel PATH e GEMINI_CLI_PATH non impostato.")
-
-    exe = cli_path or "gemini"
-    # Varianti supportate da diverse versioni della CLI:
-    # - Alcune versioni non hanno il sottocomando 'prompt' né l'opzione '--json'.
-    # - Usiamo -p per modalità non-interattiva o stdin come fallback.
-    candidates = [
-        {"args": [exe, "-m", model, "-p", prompt], "stdin": False},
-        {"args": [exe, "-p", prompt], "stdin": False},
-        {"args": [exe, "-m", model], "stdin": True},
-        {"args": [exe], "stdin": True},
-    ]
-
-    for item in candidates:
-        cmd = item["args"]
-        use_stdin = item["stdin"]
-        try:
-            if use_stdin:
-                res = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env)
-            else:
-                res = subprocess.run(cmd, capture_output=True, text=True, env=env)
-            out = (res.stdout or "").strip()
-            err = (res.stderr or "").strip()
-            if res.returncode != 0:
-                logging.warning("gemini cli ha restituito codice %s. stderr: %s", res.returncode, err)
-                continue
-            data = _try_parse_json(out)
-            if data is not None:
-                return data
-            # A volte il JSON è su stderr
-            data = _try_parse_json(err)
-            if data is not None:
-                return data
-        except FileNotFoundError:
-            logging.warning("CLI 'gemini' non trovata: provo fallback SDK google-generativeai…")
-            try:
-                data = call_gemini_sdk(prompt, model)
-                if data is not None:
-                    return data
-            except RateLimitExceeded:
-                # Propaga al chiamante così può interrompere il batch
-                raise
-            # Se arrivo qui, fallback non ha prodotto dati
-            raise FileNotFoundError(
-                "Comando 'gemini' non trovato e fallback SDK non disponibile o senza dati utili."
-            )
-        except Exception as e:
-            logging.warning("Errore chiamando gemini cli con %s: %s", cmd, e)
-
-    raise ValueError("Impossibile ottenere una risposta JSON valida dalla CLI di Gemini.")
-
-
-def call_gemini_sdk(prompt: str, model: str = None) -> Optional[Dict]:
-    """Fallback: usa google-generativeai se la CLI non è disponibile."""
-    if model is None:
-        model = MODEL or "gemini-1.5-pro"
+        model = MODEL or "gemini-1.5-flash"
         
     try:
         import google.generativeai as genai
     except Exception as e:
-        logging.warning("SDK Gemini non disponibile: %s", e)
+        logging.error("SDK Gemini non disponibile: %s", e)
         return None
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
-        logging.warning("API key Gemini mancante per SDK.")
+        logging.error("API key Gemini mancante.")
         return None
 
     try:
@@ -403,9 +329,9 @@ def call_gemini_sdk(prompt: str, model: str = None) -> Optional[Dict]:
                     retry = int(m.group(1))
                 except Exception:
                     retry = None
-            logging.warning("Errore nel fallback SDK (quota/429): %s", msg)
+            logging.error("Quota Gemini esaurita (429). Suggerito retry dopo %s secondi. Interrompo il batch.", retry)
             raise RateLimitExceeded("Quota Gemini esaurita o rate limit raggiunto", retry_after_seconds=retry)
-        logging.warning("Errore nel fallback SDK: %s", msg)
+        logging.error("Errore chiamando Gemini API: %s", msg)
         return None
 
 
@@ -573,7 +499,11 @@ def process_email(gmail, calendar, msg_id: str) -> None:
     prompt = build_prompt(body, subject)
 
     logging.info("Invio email %s a Gemini per analisi…", msg_id)
-    result = call_gemini_cli(prompt, MODEL)
+    result = call_gemini_api(prompt, MODEL)
+    if result is None:
+        logging.error("Impossibile ottenere risposta da Gemini per email %s", msg_id)
+        return
+        
     creare, titolo, data_str, ora_inizio, descrizione = parse_event_decision(result)
 
     if not creare:

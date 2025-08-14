@@ -12,8 +12,7 @@ Requisiti:
 - File `client_secret.json` valido nella stessa cartella dello script.
 - Il file `token.json` sarà creato al primo avvio dopo l'autorizzazione.
 - Variabile d'ambiente `GEMINI_API_KEY` già presente (non forniamo `.env`).
-- CLI di Gemini installata e disponibile nel PATH (comando `gemini`).
-	- Nota: in CI l'installazione della CLI è "best-effort"; se non disponibile, lo script usa il fallback SDK `google-generativeai` automaticamente.
+- SDK `google-generativeai` per l'integrazione con Gemini (incluso in requirements.txt).
 
 Installazione dipendenze (Windows PowerShell) senza venv:
 ```powershell
@@ -33,9 +32,8 @@ Pianificazione (Utilità di pianificazione di Windows):
 Variabili opzionali (configurazione ottimale per produzione):
 - `GEMINI_MODEL` (default `gemini-1.5-flash`): **RACCOMANDATO** per uso quotidiano - più economico e veloce
 - `TIMEZONE` (default `Europe/Rome`)
-- `MAX_UNREAD_TO_PROCESS` (default `1`): limita email elaborate per ridurre quota - **TESTATO CON SUCCESSO**
+- `MAX_UNREAD_TO_PROCESS` (default `5`): limita email elaborate per ridurre quota - **TESTATO CON SUCCESSO**
 - `PER_EMAIL_SLEEP_SECS` (default `10`): pausa tra email per rispettare rate limits - **CONFIGURAZIONE STABILE**
-- `GEMINI_CLI_PATH`: percorso esplicito dell'eseguibile `gemini` se non è nel PATH (utile su Windows)
 
 Log: `automation.log` nella stessa cartella.
 
@@ -52,16 +50,22 @@ Log: `automation.log` nella stessa cartella.
 
 **Log di successo**:
 ```
+2025-08-15 00:47:16,441 [INFO] Invio email a Gemini per analisi…
 2025-08-15 00:47:18,834 [INFO] Evento creato: Consegna Amazon (j4tvlu6jbkac6j3o7g9cpiskdo)
 2025-08-15 00:47:19,274 [INFO] Email 198a31871c6c96d5 marcata come letta
 ```
+
+**Miglioramenti architetturali**:
+- ✅ **SDK diretto**: Rimossa dipendenza CLI Gemini (mai funzionante)
+- ✅ **Avvio più veloce**: Eliminata ricerca PATH inutile  
+- ✅ **Log più puliti**: Nessun warning CLI
+- ✅ **Codice semplificato**: Unico path di esecuzione stabile
 
 ## Esecuzione in GitHub Actions (CI)
 
 Questo repo include un workflow: `.github/workflows/run-agent.yml` che:
 - Esegue un precheck dei Secrets e cache di pip,
-- Tenta l'installazione della Gemini CLI (best-effort) e imposta il PATH,
-- Installa le dipendenze Python,
+- Installa le dipendenze Python (incluso google-generativeai SDK),
 - Esegue lo script (con jitter di 5s),
 - Carica l'artefatto `automation.log` e scrive un Job Summary.
 
@@ -86,7 +90,7 @@ Quote e limiti dell'API Gemini (configurazione ottimizzata):
 
 Lo script, in CI, scrive `client_secret.json` e `token.json` dai Secrets. In ambiente CI, non viene avviato il browser per OAuth: serve un `TOKEN_JSON` già valido.
 
-Se la CLI Gemini non è presente sul runner, lo script utilizza automaticamente il fallback SDK (`google-generativeai`) per generare la risposta JSON; la dipendenza è inclusa in `requirements.txt`.
+**Importante**: Il sistema usa direttamente l'SDK `google-generativeai` per massima affidabilità e velocità.
 
 ### Rigenerare un TOKEN_JSON valido con gli scope corretti
 
