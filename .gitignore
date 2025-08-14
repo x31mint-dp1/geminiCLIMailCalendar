@@ -1,8 +1,6 @@
 # Python
 __pycache__/
 *.pyc
-esempio script.py
-esempio funzionante.yml
 
 # Credenziali e segreti locali
 .env
@@ -15,9 +13,4 @@ automation.log
 # Sistemi/IDE
 .vscode/
 .DS_Store
-
-Agent24event.code-workspace
-
-documenti/
-
-GitHub comandi ALL.txt
+esempio script.py

@@ -94,6 +94,9 @@ jobs:
           TOKEN_JSON: ${{ secrets.TOKEN_JSON }}
           GITHUB_ACTIONS: "true"
           TZ: Europe/Rome
+          MAX_UNREAD_TO_PROCESS: "5"
+          PER_EMAIL_SLEEP_SECS: "2"
+          GEMINI_MODEL: "gemini-1.5-flash"
         shell: bash
         run: |
           python "ControllaEmailCreaEvento.py"

@@ -1,0 +1,46 @@
+Apri il terminale (non importa in quale cartella).
+Controlla la tua configurazione Git attuale:
+code
+git config --global user.name
+git config --global user.email
+
+
+Soluzione Passo-Passo
+Dobbiamo forzare Git a "dimenticare" le vecchie credenziali di sumupdp1 in modo che ti chieda quelle nuove per x31mint-dp1.
+1. Rimuovi le Vecchie Credenziali da Windows
+Il modo più semplice per farlo su Windows è tramite il Gestore Credenziali.
+Apri il menu Start e cerca "Gestione Credenziali" (o "Credential Manager" se hai Windows in inglese) e aprilo.
+Clicca su "Credenziali di Windows".
+Cerca nella lista una credenziale che assomigli a git:https://github.com.
+Clicca su di essa per espanderla e poi seleziona Rimuovi. Conferma la rimozione.
+Questo cancellerà la password salvata per l'utente sumupdp1.
+controllare quali file sono pronti per il commit
+git status
+git add .gitignore
+
+
+
+…or create a new repository on the command line
+echo "# geminiCLIMailCalendar" >> README.md
+git init (eseguire solo la prima volta)
+git add .
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/x31mint-dp1/geminiCLIMailCalendar.git
+git push -u origin main
+
+
+ ora? Il tuo flusso di lavoro da adesso in poi
+Ora che tutto è configurato, il tuo lavoro quotidiano sarà molto più semplice. Il ciclo sarà:
+Fai delle modifiche ai tuoi file (scrivi codice, correggi un bug, etc.).
+Prepara le modifiche per il commit:
+code
+git add .
+
+Crea un commit per salvare le modifiche nella tua cronologia locale:
+code
+git commit -m "Una breve descrizione di cosa ho modificato"
+
+Carica le modifiche su GitHub:
+code
+git push

@@ -28,16 +28,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
 ]
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
-TIMEZONE = os.getenv("TIMEZONE", "Europe/Rome")
-try:
-    MAX_UNREAD_TO_PROCESS = int(os.getenv("MAX_UNREAD_TO_PROCESS", "10"))
-except Exception:
-    MAX_UNREAD_TO_PROCESS = 10
-try:
-    PER_EMAIL_SLEEP_SECS = float(os.getenv("PER_EMAIL_SLEEP_SECS", "0"))
-except Exception:
-    PER_EMAIL_SLEEP_SECS = 0.0
+# Variabili globali che verranno inizializzate in main() dopo load_env()
+MODEL = None
+TIMEZONE = None
+MAX_UNREAD_TO_PROCESS = None
+PER_EMAIL_SLEEP_SECS = None
 
 
 class RateLimitExceeded(Exception):
@@ -270,6 +265,9 @@ def get_email_subject_and_body(gmail, msg_id: str) -> Tuple[str, str]:
 
     headers = msg.get("payload", {}).get("headers", [])
     subject = next((h["value"] for h in headers if h.get("name") == "Subject"), "(senza oggetto)")
+    
+    # Log dell'oggetto per debug
+    logging.info("Elaborazione email con oggetto: %s", subject)
 
     text = _extract_text_from_payload(msg.get("payload", {}))
     if not text:
@@ -299,7 +297,10 @@ def _try_parse_json(text: str) -> Optional[Dict]:
     return None
 
 
-def call_gemini_cli(prompt: str, model: str = MODEL) -> Dict:
+def call_gemini_cli(prompt: str, model: str = None) -> Dict:
+    if model is None:
+        model = MODEL or "gemini-1.5-pro"
+    
     if not os.getenv("GEMINI_API_KEY"):
         raise RuntimeError("GEMINI_API_KEY non impostata (manca .env o variabile d'ambiente)")
 
@@ -368,8 +369,11 @@ def call_gemini_cli(prompt: str, model: str = MODEL) -> Dict:
     raise ValueError("Impossibile ottenere una risposta JSON valida dalla CLI di Gemini.")
 
 
-def call_gemini_sdk(prompt: str, model: str = MODEL) -> Optional[Dict]:
+def call_gemini_sdk(prompt: str, model: str = None) -> Optional[Dict]:
     """Fallback: usa google-generativeai se la CLI non è disponibile."""
+    if model is None:
+        model = MODEL or "gemini-1.5-pro"
+        
     try:
         import google.generativeai as genai
     except Exception as e:
@@ -510,15 +514,37 @@ def mark_email_as_read(gmail, msg_id: str) -> None:
 
 
 def build_prompt(email_text: str, email_subject: Optional[str] = None) -> str:
+    from datetime import datetime
+    import pytz
+    
+    # Ottieni la data corrente in Italia
+    italy_tz = pytz.timezone("Europe/Rome")
+    today = datetime.now(italy_tz)
+    today_str = today.strftime("%d-%m-%Y")
+    day_name = today.strftime("%A")
+    
+    # Traduci il nome del giorno in italiano
+    day_translation = {
+        "Monday": "lunedì", "Tuesday": "martedì", "Wednesday": "mercoledì",
+        "Thursday": "giovedì", "Friday": "venerdì", "Saturday": "sabato", "Sunday": "domenica"
+    }
+    day_italian = day_translation.get(day_name, day_name)
+    
     subject_block = f"Oggetto: {email_subject}\n" if email_subject else ""
     return f"""
 Sei un assistente che analizza email in italiano per capire se contengono un evento, appuntamento o scadenza da aggiungere al calendario.
+
+INFORMAZIONI TEMPORALI CORRENTI:
+- Data di oggi: {today_str} ({day_italian})
+- Anno corrente: {today.year}
+- Quando una email non specifica l'anno, ASSUMI SEMPRE l'anno corrente ({today.year}) o l'anno successivo se la data è già passata quest'anno.
 
 Istruzioni e vincoli:
 - Luogo/Fuso orario: Italia. Usa sempre il fuso Europe/Rome (CET/CEST) e considera l'ora legale alla data indicata.
 - Se la mail contiene solo una data (senza orario), crea un evento di GIORNATA INTERA per quella data.
 - Se è presente anche un orario, crea un evento con orario (l'inizio coincide con l'orario indicato). Se l'orario non specifica fuso, interpretalo come orario italiano. Se è indicato un fuso diverso, converti all'ora italiana per la data specifica.
-- Riconosci anche espressioni relative: "oggi", "domani", "dopodomani", "questo venerdì", "la prossima settimana", ecc. Calcola la data assoluta rispetto a oggi in Italia.
+- Riconosci anche espressioni relative: "oggi", "domani", "dopodomani", "questo venerdì", "la prossima settimana", ecc. Calcola la data assoluta rispetto a oggi ({today_str}) in Italia.
+- IMPORTANTE: Se una data come "25 dicembre" non ha anno, usa {today.year}. Se la data è già passata quest'anno, usa {today.year + 1}.
 - Ignora firme, disclaimer e contenuti non rilevanti. Se ci sono più date, scegli quella più plausibile per l'azione richiesta.
 - Restituisci SOLO un oggetto JSON, nessun testo aggiuntivo, nessun commento, nessun backtick.
 
@@ -547,7 +573,7 @@ def process_email(gmail, calendar, msg_id: str) -> None:
     prompt = build_prompt(body, subject)
 
     logging.info("Invio email %s a Gemini per analisi…", msg_id)
-    result = call_gemini_cli(prompt)
+    result = call_gemini_cli(prompt, MODEL)
     creare, titolo, data_str, ora_inizio, descrizione = parse_event_decision(result)
 
     if not creare:
@@ -570,8 +596,23 @@ def process_email(gmail, calendar, msg_id: str) -> None:
 
 
 def main() -> None:
+    global MODEL, TIMEZONE, MAX_UNREAD_TO_PROCESS, PER_EMAIL_SLEEP_SECS
+    
     setup_logging()
     load_env()
+    
+    # Inizializza variabili globali DOPO aver caricato il .env
+    MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
+    TIMEZONE = os.getenv("TIMEZONE", "Europe/Rome")
+    try:
+        MAX_UNREAD_TO_PROCESS = int(os.getenv("MAX_UNREAD_TO_PROCESS", "10"))
+    except Exception:
+        MAX_UNREAD_TO_PROCESS = 10
+    try:
+        PER_EMAIL_SLEEP_SECS = float(os.getenv("PER_EMAIL_SLEEP_SECS", "0"))
+    except Exception:
+        PER_EMAIL_SLEEP_SECS = 0.0
+    
     # Scrive i file credenziali da Secrets (se presenti, tipicamente in CI)
     setup_credentials_from_ci_env()
 
