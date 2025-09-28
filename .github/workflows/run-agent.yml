@@ -86,7 +86,7 @@ jobs:
           TZ: Europe/Rome
           MAX_UNREAD_TO_PROCESS: "5"
           PER_EMAIL_SLEEP_SECS: "10"
-          GEMINI_MODEL: "gemini-1.5-flash"
+          GEMINI_MODEL: "gemini-2.5-pro"
         shell: bash
         run: |
           python "ControllaEmailCreaEvento.py"
