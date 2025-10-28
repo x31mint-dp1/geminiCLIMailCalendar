@@ -29,9 +29,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-v2-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-pip-v2-
 
       - name: Precheck secrets (non bloccante)
         id: precheck
@@ -86,7 +86,7 @@ jobs:
           TZ: Europe/Rome
           MAX_UNREAD_TO_PROCESS: "5"
           PER_EMAIL_SLEEP_SECS: "10"
-          GEMINI_MODEL: "gemini-1.5-flash"
+          GEMINI_MODEL: "gemini-2.5-pro"
         shell: bash
         run: |
           python "ControllaEmailCreaEvento.py"
