@@ -67,6 +67,7 @@ jobs:
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
+          pip install packaging
           pip install -r "requirements.txt"
 
       - name: Jitter (5 secondi)
