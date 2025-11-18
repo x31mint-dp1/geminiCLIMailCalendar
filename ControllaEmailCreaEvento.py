@@ -298,7 +298,51 @@ def _try_parse_json(text: str) -> Optional[Dict]:
 def call_gemini_api(prompt: str, model: str = None) -> Optional[Dict]:
     """Usa google-generativeai SDK per analizzare il prompt."""
     if model is None:
-        model = MODEL or "gemini-1.5-flash"
+        model = MODEL or "gemini-2.5-pro"
+    # Prova prima con il modello pro, poi fallback a flash se fallisce
+    tried_models = [model]
+    if model == "gemini-2.5-pro":
+        tried_models.append("gemini-2.5-flash")
+    for m in tried_models:
+        try:
+            import google.generativeai as genai
+        except Exception as e:
+            logging.error("SDK Gemini non disponibile: %s", e)
+            return None
+
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            logging.error("API key Gemini mancante.")
+            return None
+
+        try:
+            genai.configure(api_key=api_key)
+            mdl = genai.GenerativeModel(m)
+            resp = mdl.generate_content(prompt)
+            text = getattr(resp, "text", None) or ""
+            data = _try_parse_json(text)
+            if data is not None:
+                logging.info(f"Risposta Gemini ottenuta con modello: {m}")
+                return data
+        except Exception as e:
+            msg = str(e)
+            if "model not found" in msg.lower() or "not available" in msg.lower() or "404" in msg:
+                logging.warning(f"Modello Gemini non disponibile: {m}, provo fallback se possibile...")
+                continue
+            # Riconosciamo rate limiting (429) e stimiamo retry
+            if "429" in msg or "quota" in msg.lower() or "rate" in msg.lower():
+                retry = None
+                m_retry = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)\s*\}", msg)
+                if m_retry:
+                    try:
+                        retry = int(m_retry.group(1))
+                    except Exception:
+                        retry = None
+                logging.error("Quota Gemini esaurita (429). Suggerito retry dopo %s secondi. Interrompo il batch.", retry)
+                raise RateLimitExceeded("Quota Gemini esaurita o rate limit raggiunto", retry_after_seconds=retry)
+            logging.error("Errore chiamando Gemini API con modello %s: %s", m, msg)
+            return None
+    return None
         
     try:
         import google.generativeai as genai
@@ -532,7 +576,7 @@ def main() -> None:
     load_env()
     
     # Inizializza variabili globali DOPO aver caricato il .env
-    MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
+    MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
     TIMEZONE = os.getenv("TIMEZONE", "Europe/Rome")
     try:
         MAX_UNREAD_TO_PROCESS = int(os.getenv("MAX_UNREAD_TO_PROCESS", "10"))

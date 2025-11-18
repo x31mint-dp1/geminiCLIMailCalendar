@@ -108,7 +108,7 @@ Questo progetto contiene lo script `ControllaEmailCreaEvento.py` che:
    GEMINI_API_KEY=la_tua_chiave_api_qui
    MAX_UNREAD_TO_PROCESS=5
    PER_EMAIL_SLEEP_SECS=10
-   GEMINI_MODEL=gemini-1.5-flash
+   GEMINI_MODEL=gemini-2.5-pro
    ```
 
 ### Passaggio 6: Generare il token.json (Prima Esecuzione)
@@ -172,7 +172,7 @@ python ControllaEmailCreaEvento.py
 **Configurazione ottimale** (file `.env`):
 ```env
 GEMINI_API_KEY=your_api_key_here
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-2.5-pro
 MAX_UNREAD_TO_PROCESS=5
 PER_EMAIL_SLEEP_SECS=10
 TIMEZONE=Europe/Rome
@@ -279,7 +279,7 @@ Il workflow è configurato per eseguire l'automazione **10 volte al giorno**:
 **Risultato**: ✅ Evento calendario creato con successo  
 
 **Configurazione vincente**:
-- `GEMINI_MODEL=gemini-1.5-flash` (modello economico)
+- `GEMINI_MODEL=gemini-2.5-pro` (modello top, fallback automatico a gemini-2.5-flash se non disponibile)
 - `MAX_UNREAD_TO_PROCESS=5` 
 - `PER_EMAIL_SLEEP_SECS=10`
 - SDK `google-generativeai` (nessuna CLI necessaria)
@@ -301,7 +301,7 @@ Il workflow è configurato per eseguire l'automazione **10 volte al giorno**:
 
 **Gemini API (Free Tier)**:
 - Documentazione: https://ai.google.dev/gemini-api/docs/rate-limits
-- **Configurazione testata**: `gemini-1.5-flash` + `PER_EMAIL_SLEEP_SECS=10`
+- **Configurazione testata**: `gemini-2.5-pro` + `PER_EMAIL_SLEEP_SECS=10` (fallback automatico a gemini-2.5-flash)
 - **Risultato**: Nessun errore 429, elaborazione fluida
 - **Capacità giornaliera**: 50 email con pause → ben sotto i limiti gratuiti
 
